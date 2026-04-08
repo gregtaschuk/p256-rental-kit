@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.toolrental</groupId>
+    <artifactId>tool-rental-applet</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>Tool Rental JavaCard Applet</name>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <javacard.version>3.0.5</javacard.version>
+    </properties>
+
+    <dependencies>
+        <!-- Java Card API — provided by the SDK, not bundled -->
+        <dependency>
+            <groupId>com.oracle.javacard</groupId>
+            <artifactId>api_classic</artifactId>
+            <version>3.0.5</version>
+            <scope>system</scope>
+            <!-- Set JAVACARD_SDK env var or update this path to your Java Card SDK -->
+            <systemPath>${env.JAVACARD_SDK}/api_classic-3.0.5.jar</systemPath>
+        </dependency>
+
+        <!-- JCMathLib: EC math for secp256k1 on Java Card -->
+        <!-- Clone from https://github.com/OpenCryptoProject/JCMathLib and mvn install -->
+        <dependency>
+            <groupId>opencrypto</groupId>
+            <artifactId>jcmathlib</artifactId>
+            <version>1.0.0</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/lib/jcmathlib.jar</systemPath>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <!-- Java Card bytecode must target 1.2 or lower for JCOP4 classic -->
+                    <source>1.2</source>
+                    <target>1.2</target>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
