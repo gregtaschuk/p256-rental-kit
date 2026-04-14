@@ -25,14 +25,13 @@ identifier that ties the physical object to the on-chain NFT.
 ┌─────────────────────────────────────────────────────────────────────┐
 │  RENTAL START (borrower taps card with phone)                       │
 │                                                                     │
-│  1. Backend issues random 32-byte challenge                         │
+│  1. Phone generates random 32-byte challenge locally                │
 │  2. Challenge submitted on-chain (5-min TTL)                        │
-│  3. Phone sends hash to card via ISO 7816 APDU (INS 0x02)           │
-│     hash = keccak256(toolId, "start", challenge, chainId, escrow)   │
-│  4. Card signs hash with its private key → returns r, s (64 bytes)  │
-│  5. Phone computes recovery bit v by trying both IDs                │
-│  6. startRental(tokenId, days, challenge, v, r, s) called on-chain  │
-│     → ecrecover must match cardAddressOf(tokenId)                   │
+│  3. Phone builds EIP-712 digest = startRentalDigest(toolId, ch)     │
+│     and sends it to card via ISO 7816 APDU (INS 0x02)               │
+│  4. Card signs digest with its P-256 key → returns r, s (64 bytes)  │
+│  5. startRental(tokenId, days, challenge, r, s) called on-chain     │
+│     → P256.verify against ToolNFT.cardPublicKey(tokenId)            │
 │     → borrower's rentalFee + deposit locked in escrow               │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │  tool is with the borrower
@@ -40,11 +39,11 @@ identifier that ties the physical object to the on-chain NFT.
 ┌─────────────────────────────────────────────────────────────────────┐
 │  RENTAL END — clean return (lender taps card with phone)            │
 │                                                                     │
-│  1. Backend issues new challenge                                    │
+│  1. Phone generates new challenge locally                           │
 │  2. Challenge submitted on-chain                                    │
 │  3. Same tap flow as start, but:                                    │
-│     hash = keccak256(rentalId, "end", challenge, chainId, escrow)   │
-│  4. endRental(rentalId, challenge, v, r, s) called on-chain         │
+│     digest = endRentalDigest(rentalId, challenge)                   │
+│  4. endRental(rentalId, challenge, r, s) called on-chain            │
 │     → lender receives rentalFee                                     │
 │     → borrower receives deposit back                                │
 └──────────────────────────────┬──────────────────────────────────────┘

@@ -387,7 +387,7 @@ program
 
       // Step 3: Mint NFT
       console.log("\n[3/3] Minting ToolNFT on-chain...");
-      const tx = await toolNft.mint(owner, cardKeyX, cardKeyY);
+      const tx = await toolNft.mint(owner, cardKeyX, cardKeyY, "");
       console.log("  Tx hash:", tx.hash);
       const receipt = await tx.wait();
       console.log("  Confirmed in block:", receipt.blockNumber);
