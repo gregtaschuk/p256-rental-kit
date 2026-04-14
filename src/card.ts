@@ -2,7 +2,6 @@
  * High-level card operations using the ACR122U via nfc-pcsc.
  */
 
-import { ethers } from "ethers";
 import { buildSelectApdu, buildGetPublicKeyApdu, buildSignApdu, parseResponse } from "./apdu";
 
 export interface CardReader {
@@ -20,10 +19,10 @@ export async function selectApplet(reader: CardReader): Promise<void> {
 }
 
 /**
- * Read the card's secp256k1 public key and derive its Ethereum address.
- * Returns { publicKeyHex, address }.
+ * Read the card's P-256 public key.
+ * Returns { x, y } as 0x-prefixed 32-byte hex strings.
  */
-export async function readCardPublicKey(reader: CardReader): Promise<{ publicKeyHex: string; address: string }> {
+export async function readCardPublicKey(reader: CardReader): Promise<{ x: string; y: string }> {
   await selectApplet(reader);
 
   const apdu = buildGetPublicKeyApdu();
@@ -34,15 +33,10 @@ export async function readCardPublicKey(reader: CardReader): Promise<{ publicKey
     throw new Error(`Unexpected public key length: ${pubKeyBytes.length}`);
   }
 
-  // Reconstruct uncompressed public key for ethers (04 || X || Y)
-  const uncompressed = Buffer.concat([Buffer.from([0x04]), pubKeyBytes]);
-  const publicKeyHex = "0x" + uncompressed.toString("hex");
-
-  // Derive Ethereum address: keccak256(X || Y)[12:]
-  const hash = ethers.keccak256("0x" + pubKeyBytes.toString("hex"));
-  const address = ethers.getAddress("0x" + hash.slice(26)); // last 20 bytes
-
-  return { publicKeyHex, address };
+  return {
+    x: "0x" + pubKeyBytes.subarray(0, 32).toString("hex"),
+    y: "0x" + pubKeyBytes.subarray(32, 64).toString("hex"),
+  };
 }
 
 /**
@@ -71,21 +65,3 @@ export async function signHash(reader: CardReader, hash32: Buffer): Promise<{ r:
   };
 }
 
-/**
- * Compute the Ethereum recovery bit (v = 27 or 28) from an ECDSA signature.
- * Tries both recovery IDs and returns the one that yields the expected address.
- */
-export function computeRecoveryBit(
-  hash: string,
-  r: string,
-  s: string,
-  expectedAddress: string
-): 27 | 28 {
-  for (const v of [27, 28] as const) {
-    try {
-      const recovered = ethers.recoverAddress(hash, { r, s, v });
-      if (recovered.toLowerCase() === expectedAddress.toLowerCase()) return v;
-    } catch {}
-  }
-  throw new Error("Could not recover address — wrong key or hash?");
-}
