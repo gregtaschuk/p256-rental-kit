@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # burn-card.sh — Load the ToolRental JavaCard applet onto a blank J3R180 JCOP4-180K card.
 #
-# Loads (does NOT fuse/lock) the applet — card remains re-provisionable with default NXP keys.
+# By default loads (does NOT fuse/lock) the applet — card remains re-provisionable
+# with default NXP keys. Pass --lock to put the card in the CARD_LOCKED state
+# after a successful burn, which blocks all further INSTALL/DELETE APDUs. Only
+# do this once the tool NFT is minted and the card is ready to ship.
 #
 # Usage:
 #   ./burn-card.sh [options]
@@ -11,6 +14,11 @@
 #   --gp-jar <path>           Path to gp.jar (default: ./gp.jar; auto-downloaded if absent)
 #   --gp-key <enc:mac:dek>    Non-default GlobalPlatform secure channel keys (hex, colon-sep)
 #   --skip-verify             Skip the post-install sign/verify round-trip (see ./test-card.sh)
+#   --lock                    After a successful burn+verify, lock the card so it
+#                             cannot be re-burned. Uses GP `--lock-card` (CARD_LOCKED
+#                             state): SELECT and applet APDUs keep working, but
+#                             INSTALL/DELETE are blocked. Reversible only with the
+#                             GP secure-channel keys via `gp --unlock-card`. OFF by default.
 #   -y, --yes                 Auto-confirm re-burn if applets are already installed
 #   --dry-run                 Print commands without executing
 #   -h, --help                Show this help
@@ -34,6 +42,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JAVACARD_DIR="$(cd "$SCRIPT_DIR/../javacard" && pwd)"
+REAL_CARD_CACHE="$SCRIPT_DIR/../contracts/scripts/.real-card.json"
 
 GP_VERSION="25.10.20"
 GP_DOWNLOAD_URL="https://github.com/martinpaljak/GlobalPlatformPro/releases/download/v${GP_VERSION}/gp.jar"
@@ -63,6 +72,7 @@ GP_KEY=""
 DRY_RUN=0
 SKIP_VERIFY=0
 ASSUME_YES=0
+LOCK_CARD=0
 
 usage() {
     sed -n '2,/^set -/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//'
@@ -75,6 +85,7 @@ while [[ $# -gt 0 ]]; do
         --gp-key)      GP_KEY="$2";   shift 2 ;;
         --dry-run)     DRY_RUN=1;     shift   ;;
         --skip-verify) SKIP_VERIFY=1; shift   ;;
+        --lock)        LOCK_CARD=1;   shift   ;;
         -y|--yes)      ASSUME_YES=1;  shift   ;;
         -h|--help)     usage; exit 0           ;;
         *)             die "Unknown option: $1. Use --help for usage." ;;
@@ -360,7 +371,8 @@ install_applet() {
     fi
 
     # Forward dependency order: core first (generates the P-256 key), then
-    # NDEF (reads that key via the Shareable interface at install time).
+    # NDEF (reads that key via the Shareable interface at first-select,
+    # hashes it on-card with SHA-256, and bakes the NDEF file).
     install_one_cap "$CAP_FILE"      "ToolRental core applet"
     echo ""
     install_one_cap "$NDEF_CAP_FILE" "NDEF tag applet"
@@ -429,6 +441,86 @@ Try re-burning, or run ./test-card.sh directly for more detail."
     fi
 }
 
+# ── Step 7b: Cache key for the dev seed ───────────────────────────────────────
+#
+# dev-setup.ts reads contracts/scripts/.real-card.json and binds the first
+# seeded tool (Pressure Washer) to that card's P-256 key. By writing it here
+# automatically, the most recently burned card is always the one the local
+# Anvil chain seeds against — no manual bind-real-card.sh step needed.
+cache_real_card() {
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo -e "${YELLOW}[DRY-RUN]${NC} would cache card key to $REAL_CARD_CACHE"
+        return 0
+    fi
+    if [[ "$SKIP_VERIFY" -eq 1 ]]; then
+        # Without verify we never read the key; skip silently.
+        return 0
+    fi
+
+    info "Caching card key for dev seed..."
+    local output
+    if ! output="$(cd "$SCRIPT_DIR" && npx ts-node src/index.ts read-key 2>&1)"; then
+        echo "$output" >&2
+        warn "read-key failed after a successful burn — dev seed cache NOT updated."
+        return 0
+    fi
+    local x y
+    x="$(echo "$output" | awk '/Public key X:/ {print $NF}')"
+    y="$(echo "$output" | awk '/Public key Y:/ {print $NF}')"
+    if [[ -z "$x" || -z "$y" ]]; then
+        warn "Could not parse X/Y from read-key output — dev seed cache NOT updated."
+        return 0
+    fi
+    mkdir -p "$(dirname "$REAL_CARD_CACHE")"
+    cat > "$REAL_CARD_CACHE" <<EOF
+{
+  "x": "$x",
+  "y": "$y"
+}
+EOF
+    success "Cached card key to $REAL_CARD_CACHE"
+    success "Next ./dev-start.sh --reset will bind the first seeded tool to this card."
+}
+
+# ── Step 7c: Optional card lock ───────────────────────────────────────────────
+#
+# gp.jar `--lock-card` issues SET STATUS to move the ISD to CARD_LOCKED. In
+# that state the card refuses further INSTALL/DELETE/LOAD APDUs — so this
+# burn becomes final — but SELECT and applet APDUs (sign, read-key, NDEF)
+# keep working exactly as before. Reversible only by running `gp --unlock-card`
+# with the current GP secure-channel keys; without those keys the card is
+# effectively sealed for re-burning.
+#
+# Only runs when --lock is passed. We lock AFTER verify + cache so a failed
+# burn never locks a broken card.
+lock_card() {
+    if [[ "$LOCK_CARD" -eq 0 ]]; then
+        return 0
+    fi
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo -e "${YELLOW}[DRY-RUN]${NC} ${GP_CMD[*]} --lock-card"
+        return 0
+    fi
+
+    echo ""
+    warn "Locking the card (--lock). After this, gp.jar will refuse to"
+    warn "install or delete applets on this card unless unlocked via"
+    warn "\`gp --unlock-card\` with the current GP secure-channel keys."
+    warn "Applet APDUs (sign, read-key, NDEF tap) continue to work."
+    echo ""
+
+    local output rc=0
+    output=$("${GP_CMD[@]}" --lock-card 2>&1) || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "$output" >&2
+        die "gp.jar --lock-card failed (exit code $rc). The applets were
+installed and verified successfully — re-running with --lock later will
+still work as long as you have the GP keys."
+    fi
+    echo "$output"
+    success "Card locked. Re-burns blocked until \`gp --unlock-card\` is run."
+}
+
 # ── Step 8: Success banner ────────────────────────────────────────────────────
 
 print_success() {
@@ -467,6 +559,8 @@ main() {
     install_applet
     confirm_install
     run_verify
+    cache_real_card
+    lock_card
     print_success
 }
 

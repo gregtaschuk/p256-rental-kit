@@ -324,7 +324,8 @@ program
               throw new Error(`URI length (${payloadLen - 1}) exceeds record body`);
             }
             const uri = rec.subarray(5, uriEnd).toString("ascii");
-            const expectedUri = `toolrental://card/${key1.x.slice(2)}${key1.y.slice(2)}`;
+            const cardKeyHash = ethers.sha256(ethers.concat([key1.x, key1.y]));
+            const expectedUri = `toolrental://card/${cardKeyHash.slice(2)}`;
             const match = uri === expectedUri;
             record(match, "NDEF URI record encodes the card's public key",
               match ? undefined :
@@ -346,6 +347,11 @@ program
         console.log(`\n${passed}/${checks.length} checks passed.`);
         console.log(`\nPublic key X: ${key1.x}`);
         console.log(`Public key Y: ${key1.y}`);
+        const hashHex = ethers.sha256(ethers.concat([key1.x, key1.y])).slice(2);
+        console.log(`Card key hash: 0x${hashHex}`);
+        console.log(`\nNDEF URLs stored on card:`);
+        console.log(`  toolrental://card/${hashHex}`);
+        console.log(`  https://pyrite.rocks/tools/${hashHex}`);
 
         if (passed !== checks.length) {
           process.exitCode = 1;
