@@ -225,7 +225,18 @@ program
         const apduSelectCc      = Buffer.from([0x00, 0xA4, 0x00, 0x0C, 0x02, 0xE1, 0x03]);
         const apduReadCc        = Buffer.from([0x00, 0xB0, 0x00, 0x00, 0x0F]);
         const apduSelectNdef    = Buffer.from([0x00, 0xA4, 0x00, 0x0C, 0x02, 0xE1, 0x04]);
-        const apduReadNdef      = Buffer.from([0x00, 0xB0, 0x00, 0x00, 0x00]); // Le=0 → up to 256
+        // Canonical Type 4 NDEF read: first READ_BINARY at offset 0 with Le=2
+        // to get NLEN, then READ_BINARY at offset 2 with Le=NLEN for the body.
+        // ACR122U firmware misbehaves on `Le=0x00` (up-to-256) when the total
+        // NDEF file is large (it's advertised at 330 bytes on our cards) —
+        // the PC/SC layer surfaces this as "An error occurred while
+        // transmitting". Reading a known length avoids the long-response
+        // path entirely.
+        const apduReadNlen = Buffer.from([0x00, 0xB0, 0x00, 0x00, 0x02]);
+        function buildReadNdefBody(nlen: number): Buffer {
+          // Offset 2 past the NLEN prefix. Le is the byte-count to read.
+          return Buffer.from([0x00, 0xB0, 0x00, 0x02, nlen & 0xFF]);
+        }
 
         let ndefChainOk = true;
         try {
@@ -264,19 +275,31 @@ program
         if (ndefChainOk) {
           try {
             parseResponse(await reader.transmit(apduSelectNdef, 256));
-            const ndefBytes = parseResponse(await reader.transmit(apduReadNdef, 256));
-            if (ndefBytes.length < 2) {
-              throw new Error(`NDEF file too short: ${ndefBytes.length} bytes`);
+            // Two-step read: first 2 bytes are NLEN, then read exactly NLEN
+            // body bytes from offset 2. Avoids the ACR122U long-Le=0 bug.
+            const nlenBytes = parseResponse(await reader.transmit(apduReadNlen, 8));
+            if (nlenBytes.length < 2) {
+              throw new Error(`NLEN read returned ${nlenBytes.length} bytes (expected 2)`);
             }
-            const nlen = ndefBytes.readUInt16BE(0);
+            const nlen = nlenBytes.readUInt16BE(0);
             if (nlen === 0) {
               throw new Error("NLEN is 0 — NDEF file is empty (init never populated it)");
             }
-            if (2 + nlen > ndefBytes.length) {
-              throw new Error(`NLEN (${nlen}) > returned payload (${ndefBytes.length - 2})`);
+            if (nlen > 255) {
+              // Our cards carry a ~150-byte record; anything beyond 255 means
+              // we'd need chained READ_BINARY calls, which we don't implement.
+              throw new Error(`NLEN (${nlen}) > 255, chained read not implemented`);
             }
-            // Parse the single short URI record.
-            const rec = ndefBytes.subarray(2, 2 + nlen);
+            const bodyBytes = parseResponse(
+              await reader.transmit(buildReadNdefBody(nlen), nlen + 8),
+            );
+            if (bodyBytes.length < nlen) {
+              throw new Error(
+                `body read returned ${bodyBytes.length} bytes (expected ${nlen})`,
+              );
+            }
+            // Parse the single short URI record from the body.
+            const rec = bodyBytes.subarray(0, nlen);
             if (rec.length < 5) {
               throw new Error(`record too short: ${rec.length} bytes`);
             }

@@ -9,6 +9,7 @@ export const APPLET_AID = Buffer.from("A0000006170001", "hex");
 export const CLA = 0x00;
 export const INS_GET_PUBLIC_KEY = 0x01;
 export const INS_SIGN = 0x02;
+export const INS_GET_COUNTER = 0x03;
 
 /**
  * Build SELECT APDU to activate the applet.
@@ -32,12 +33,21 @@ export function buildGetPublicKeyApdu(): Buffer {
 
 /**
  * Build SIGN APDU.
- * @param hash32 32-byte hash to sign.
- * Response: 64 bytes (r || s).
+ * @param hash32 32-byte hash to sign. Must commit to the card's next counter
+ *               value (read via GET_COUNTER earlier in the same session).
+ * Response: 72 bytes — r[32] || s[32] || counter[8] (counter big-endian).
  */
 export function buildSignApdu(hash32: Buffer): Buffer {
   if (hash32.length !== 32) throw new Error("Hash must be 32 bytes");
-  return Buffer.from([CLA, INS_SIGN, 0x00, 0x00, 0x20, ...hash32, 0x40]);
+  return Buffer.from([CLA, INS_SIGN, 0x00, 0x00, 0x20, ...hash32, 0x48]);
+}
+
+/**
+ * Build GET_COUNTER APDU.
+ * Response: 8 bytes big-endian — the next counter value SIGN will consume.
+ */
+export function buildGetCounterApdu(): Buffer {
+  return Buffer.from([CLA, INS_GET_COUNTER, 0x00, 0x00, 0x08]);
 }
 
 /**
