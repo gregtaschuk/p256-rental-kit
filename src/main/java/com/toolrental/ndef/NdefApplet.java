@@ -369,7 +369,16 @@ public class NdefApplet extends Applet {
             ISOException.throwIt(ISO7816.SW_WRONG_P1P2);
         }
         short available = (short) (fileLen - offset);
-        if (le == 0 || le > available) le = available;
+        // ISO 7816-4 short-form Le=0x00 means "up to 256 bytes". Some PC/SC
+        // stacks (notably ACR122U) only size the response buffer for 256 and
+        // error out mid-transmit if the card sends more — so when the host
+        // asks for 0, we must cap at 256, not return the full remaining file.
+        // For explicit Le values we still trim to what's actually available.
+        if (le == 0) {
+            le = available > 256 ? (short) 256 : available;
+        } else if (le > available) {
+            le = available;
+        }
 
         apdu.setOutgoingLength(le);
         apdu.sendBytesLong(file, offset, le);

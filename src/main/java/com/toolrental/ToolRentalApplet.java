@@ -11,8 +11,15 @@ import javacardx.crypto.Cipher;
  * provides two APDU commands:
  *
  *   INS 0x01  GET_PUBLIC_KEY  — Returns the 64-byte uncompressed public key (X || Y).
- *   INS 0x02  SIGN            — Accepts a 32-byte hash and returns a 64-byte raw
- *                               ECDSA signature (r || s).
+ *   INS 0x02  SIGN            — Accepts a 32-byte hash that must commit to the
+ *                               card's next counter value. Atomically increments
+ *                               the persistent counter and returns
+ *                               r[32] || s[32] || counter[8] (74 bytes), where
+ *                               `counter` is the value just consumed.
+ *   INS 0x03  GET_COUNTER     — Returns the next counter value the card would
+ *                               produce on the next SIGN call, as 8 bytes
+ *                               big-endian. Used by the host to pre-compute the
+ *                               hash before tapping.
  *
  * The private key is generated on-card and never exported. The card's P-256
  * public key coordinates (X, Y) are registered on-chain in ToolNFT.sol.
@@ -36,6 +43,7 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
     // ── APDU instruction bytes ────────────────────────────────────────────────
     private static final byte INS_GET_PUBLIC_KEY = (byte) 0x01;
     private static final byte INS_SIGN           = (byte) 0x02;
+    private static final byte INS_GET_COUNTER    = (byte) 0x03;
 
     // ── P-256 (secp256r1) curve parameters ──────────────────────────────��────
     private static final byte[] P256_P = {
@@ -79,6 +87,15 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
     private ECPublicKey   publicKey;
     private Signature     signer;
 
+    // ── Replay-prevention counter (persistent) ────────────────────────────────
+    // Monotonic counter consumed by each SIGN call. Starts at 1 so the first
+    // signature binds counter=1, which is strictly greater than the contract's
+    // default lastCardCounter = 0. Treated as uint16 on the host side but
+    // stored as a signed short here; SIGN refuses to increment past
+    // Short.MAX_VALUE (32767) to avoid wrap-around — 32k taps is well beyond
+    // any realistic tool lifetime.
+    private short nextCounter;
+
     // ── Transient scratch buffer ────────────────────────────────��─────────────
     // Holds the 64-byte raw signature output (r || s) before copying to APDU.
     // Also used as scratch for public key export (65 bytes with prefix byte).
@@ -97,6 +114,8 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
 
         // ECDSA signer using SHA-256 (card hashes the input before signing)
         signer = Signature.getInstance(Signature.ALG_ECDSA_SHA_256, false);
+
+        nextCounter = (short) 1;
     }
 
     /**
@@ -139,9 +158,36 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
             case INS_SIGN:
                 handleSign(apdu);
                 break;
+            case INS_GET_COUNTER:
+                handleGetCounter(apdu);
+                break;
             default:
                 ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
         }
+    }
+
+    /**
+     * INS 0x03 GET_COUNTER
+     *
+     * Command:  CLA=00 INS=03 P1=00 P2=00 Le=08
+     * Response: 8 bytes — the next counter value that SIGN will consume,
+     *           encoded big-endian. Upper 6 bytes are always zero; the
+     *           low-order 2 bytes carry the uint16 counter.
+     *
+     * The host calls this before SIGN so it can pre-compute the EIP-712
+     * digest, which must commit to the same counter value that SIGN will
+     * actually consume. Within a single NFC session nothing else can touch
+     * the card, so the value returned here is guaranteed to be the value
+     * the next SIGN will use.
+     */
+    private void handleGetCounter(APDU apdu) {
+        short c = nextCounter;
+        Util.arrayFillNonAtomic(scratch, (short) 0, (short) 8, (byte) 0);
+        scratch[6] = (byte) ((c >> 8) & 0xFF);
+        scratch[7] = (byte) (c & 0xFF);
+        apdu.setOutgoing();
+        apdu.setOutgoingLength((short) 8);
+        apdu.sendBytesLong(scratch, (short) 0, (short) 8);
     }
 
     /**
@@ -167,15 +213,24 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
     /**
      * INS 0x02 SIGN
      *
-     * Command:  CLA=00 INS=02 P1=00 P2=00 Lc=20 [32-byte hash] Le=40
-     * Response: 64 bytes — DER-decoded raw signature (r[32] || s[32]).
+     * Command:  CLA=00 INS=02 P1=00 P2=00 Lc=20 [32-byte hash] Le=48
+     * Response: 72 bytes — r[32] || s[32] || counter[8] (counter big-endian,
+     *           upper 6 bytes zero).
      *
-     * The 32-byte hash sent by the mobile app is the keccak256 commitment:
-     *   keccak256(abi.encode(toolId|rentalId, phase, challenge, chainId, contractAddress))
+     * The 32-byte hash is an EIP-712 digest that MUST commit to the counter
+     * value the card will consume on this call — the host gets that value
+     * from INS 0x03 GET_COUNTER earlier in the same NFC session. Returning
+     * the consumed counter in the response is belt-and-suspenders: the host
+     * already knows it, and the contract only trusts the value because the
+     * digest signed over it.
      *
-     * Note: ALG_ECDSA_SHA_256 will SHA-256 the input before signing. The caller
-     * must account for this: send the raw 32-byte hash and the card will sign
-     * SHA256(hash). Both sides must use the same pre-image consistently.
+     * The counter is incremented atomically together with the sign operation,
+     * so a card power-loss mid-sign cannot cause the same counter value to be
+     * consumed twice.
+     *
+     * Note: ALG_ECDSA_SHA_256 will SHA-256 the input before signing. The
+     * caller must account for this: send the raw 32-byte hash and the card
+     * will sign SHA256(hash). Both sides must use the same pre-image.
      */
     private void handleSign(APDU apdu) {
         byte[] buf = apdu.getBuffer();
@@ -185,10 +240,25 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
         }
 
+        if (nextCounter == Short.MAX_VALUE) {
+            // Card has reached its signing lifetime limit. Refuse further signs
+            // so we never wrap the counter and hand out a stale value.
+            ISOException.throwIt(ISO7816.SW_FILE_FULL);
+        }
+
+        // Burn the counter value BEFORE computing/returning the signature.
+        // If power drops after this line but before the host receives the
+        // signature, the value is simply lost (host will see a gap on its
+        // next read — contract accepts gaps). If we incremented after
+        // sending, a mid-transmission power loss could let us reuse the
+        // same counter on the next boot, which would break replay safety.
+        // Assigning to a persistent field is atomic in JavaCard.
+        short consumed = nextCounter;
+        nextCounter = (short) (consumed + 1);
+
         signer.init(privateKey, Signature.MODE_SIGN);
 
         // DER-encoded ECDSA signature can be up to 72 bytes.
-        // Store in scratch, then decode to raw r||s.
         short sigLen = signer.sign(buf, ISO7816.OFFSET_CDATA, (short) 32, scratch, (short) 0);
 
         // Decode DER signature to raw (r || s): each is 32 bytes big-endian.
@@ -197,9 +267,14 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
             ISOException.throwIt(ISO7816.SW_DATA_INVALID);
         }
 
+        // Append the 8-byte counter (big-endian, upper 6 zero) after r||s.
+        Util.arrayFillNonAtomic(scratch, (short) 64, (short) 6, (byte) 0);
+        scratch[70] = (byte) ((consumed >> 8) & 0xFF);
+        scratch[71] = (byte) (consumed & 0xFF);
+
         apdu.setOutgoing();
-        apdu.setOutgoingLength((short) 64);
-        apdu.sendBytesLong(scratch, (short) 0, (short) 64);
+        apdu.setOutgoingLength((short) 72);
+        apdu.sendBytesLong(scratch, (short) 0, (short) 72);
     }
 
     /**
