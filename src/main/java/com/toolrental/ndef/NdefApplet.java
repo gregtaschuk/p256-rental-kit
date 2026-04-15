@@ -14,10 +14,10 @@ import javacard.framework.Util;
  * NFC Forum Type 4 Tag applet. Emits a three-record NDEF message the phone's
  * OS reader picks up on tap:
  *
- *   1. URI record: toolrental://card/<xHex><yHex>
+ *   1. URI record: toolrental://card/<hashHex>
  *      (custom scheme — uniquely owned by our app, so Android's NDEF dispatch
  *      routes taps straight to us with no browser chooser)
- *   2. URI record: https://pyriteship.xyz/tools/<xHex><yHex>
+ *   2. URI record: https://pyrite.rocks/tools/<hashHex>
  *      (stored with URI abbreviation code 0x04 = "https://" to save 8 bytes;
  *      used by phones that don't have the app installed — they fall back to
  *      a browser landing page)
@@ -35,17 +35,39 @@ import javacard.framework.Util;
  * *first* record is an http/https URI, and ignores custom schemes entirely.
  * So the https URL being record 2 means iPhones show nothing on tap. The
  * path to unlock iPhone support is to host
- * https://pyriteship.xyz/.well-known/assetlinks.json with the app's signing
+ * https://pyrite.rocks/.well-known/assetlinks.json with the app's signing
  * certificate SHA-256 fingerprint, then reorder so the https URL is record 1
  * and flip android:autoVerify="true" on the Android intent filter. At that
  * point Android App Links will route verified taps to the app directly,
  * iPhone will get a Safari notification, and the toolrental:// record can
  * eventually be dropped.
  *
- * (x, y) is the 64-byte P-256 public key of the sibling ToolRentalApplet,
- * rendered as 128 lowercase hex chars concatenated with no separator. The
- * NDEF file is built once at first-select by reading the sibling applet's
- * key via the CardKeyShareable interface and baked into persistent memory.
+ * hashHex is sha256(cardKeyX || cardKeyY) of the sibling ToolRentalApplet's
+ * P-256 public key, rendered as 64 lowercase hex chars. This is the same
+ * hash the subgraph stores in Tool.cardKeyHash for reverse lookup, so the
+ * mobile deep-link router can resolve a tap to a tool in one query. The
+ * hash is computed ON-CARD by the sibling core applet from its own key
+ * bytes and handed to us via CardKeyShareable.writeCardKeyHash — self-
+ * certification: a re-burned NDEF package cannot advertise a hash for a
+ * tool whose key doesn't match the physically-present signing applet,
+ * because this applet never sees arbitrary input, only the sibling's
+ * computed identifier.
+ *
+ * SHA-256 (not keccak256) because JavaCard has it as hardware-accelerated
+ * MessageDigest.ALG_SHA_256 and keccak is not in the Java Card 3.0.5
+ * stdlib. The contract and mobile app mirror SHA-256 via the EVM
+ * precompile at 0x02 and ethers.sha256 respectively. The subgraph reads
+ * the hash from a ToolMinted event parameter — graph-ts doesn't expose
+ * sha256, so the contract is the authoritative computation site for the
+ * on-chain side.
+ *
+ * The NDEF file is built once at first-select by reading the sibling
+ * applet's card-key hash via the CardKeyShareable interface and baking
+ * the records into persistent memory. Lazy init is required because
+ * cross-package Shareable linking is unstable at install time on the
+ * J3R180 — by the first real SELECT the card has been through a reset
+ * and everything is settled.
+ *
  * At runtime this applet only answers the four Type 4 commands (SELECT app,
  * SELECT FILE, READ BINARY on CC and NDEF files).
  *
@@ -97,7 +119,7 @@ public class NdefApplet extends Applet {
     };
 
     // Record 1 — custom-scheme URI payload: 1-byte abbreviation code (0x00 =
-    // "no prefix", full URI in body) + "toolrental://card/" + 128 hex chars.
+    // "no prefix", full URI in body) + "toolrental://card/" + 64 hex chars.
     //
     // Size constants are hard-coded integer literals on purpose: the JavaCard
     // converter rejects arraylength / iadd bytecode in the class initializer,
@@ -108,17 +130,18 @@ public class NdefApplet extends Applet {
         't','o','o','l','r','e','n','t','a','l',':','/','/','c','a','r','d','/'
     };
     private static final short CUSTOM_URI_PREFIX_LEN = (short) 19;   // = CUSTOM_URI_PREFIX.length
-    private static final short HEX_KEY_LEN           = (short) 128;  // 64 bytes → 128 hex
-    private static final short CUSTOM_URI_PAYLOAD_LEN = (short) 147; // 19 + 128
+    private static final short HASH_LEN              = (short) 32;   // keccak256 digest size
+    private static final short HASH_HEX_LEN          = (short) 64;   // 32 bytes → 64 hex
+    private static final short CUSTOM_URI_PAYLOAD_LEN = (short) 83;  // 19 + 64
 
     // Record 2 — https URI payload: 1-byte abbreviation code (0x04 = "https://")
-    // + "pyriteship.xyz/tools/" + 128 hex chars.
+    // + "pyrite.rocks/tools/" + 64 hex chars.
     private static final byte[] HTTPS_URI_PREFIX = {
         (byte) 0x04,                                 // URI abbreviation: "https://"
-        'p','y','r','i','t','e','s','h','i','p','.','x','y','z','/','t','o','o','l','s','/'
+        'p','y','r','i','t','e','.','r','o','c','k','s','/','t','o','o','l','s','/'
     };
-    private static final short HTTPS_URI_PREFIX_LEN = (short) 22;    // = HTTPS_URI_PREFIX.length
-    private static final short HTTPS_URI_PAYLOAD_LEN = (short) 150;  // 22 + 128
+    private static final short HTTPS_URI_PREFIX_LEN = (short) 20;    // = HTTPS_URI_PREFIX.length
+    private static final short HTTPS_URI_PAYLOAD_LEN = (short) 84;   // 20 + 64
 
     // Record 3 — Text payload: status byte + ISO 639-1 language code + UTF-8.
     // Status byte 0x02 = UTF-8 encoding, 2-byte language code.
@@ -136,26 +159,25 @@ public class NdefApplet extends Applet {
     //
     // Record 1 — URI, first record, not last:
     //   header=0x91 type_len=0x01 pay_len=CUSTOM_URI_PAYLOAD_LEN type='U'
-    //   payload=[0x00 || "toolrental://card/" || hex key]
+    //   payload=[0x00 || "toolrental://card/" || hex hash]
     //
     // Record 2 — URI, middle record:
     //   header=0x11 type_len=0x01 pay_len=HTTPS_URI_PAYLOAD_LEN type='U'
-    //   payload=[0x04 || "pyriteship.xyz/tools/" || hex key]
+    //   payload=[0x04 || "pyrite.rocks/tools/" || hex hash]
     //
     // Record 3 — Text, last record:
     //   header=0x51 type_len=0x01 pay_len=TEXT_PAYLOAD_LEN type='T'
     //   payload=[0x02 || 'e' 'n' || LABEL_TEXT]
-    private static final short CUSTOM_URI_RECORD_LEN = (short) 151;  // 4 + 147
-    private static final short HTTPS_URI_RECORD_LEN  = (short) 154;  // 4 + 150
+    private static final short CUSTOM_URI_RECORD_LEN = (short) 87;   // 4 + 83
+    private static final short HTTPS_URI_RECORD_LEN  = (short) 88;   // 4 + 84
     private static final short TEXT_RECORD_LEN       = (short) 23;   // 4 + 19
-    private static final short NDEF_RECORD_LEN       = (short) 328;  // 151 + 154 + 23
-    private static final short NDEF_FILE_LEN         = (short) 330;  // 2 + 328
+    private static final short NDEF_RECORD_LEN       = (short) 198;  // 87 + 88 + 23
+    private static final short NDEF_FILE_LEN         = (short) 200;  // 2 + 198
 
     // ── Persistent state ──────────────────────────────────────────────────────
 
     private byte[] ccFile;     // 15 bytes
     private byte[] ndefFile;   // NDEF_FILE_LEN bytes
-    private byte[] keyBuf;     // persistent 64-byte buffer for the Shareable read
     private byte currentFile;
     private boolean initialized;
 
@@ -188,20 +210,16 @@ public class NdefApplet extends Applet {
         ccFile[11] = (byte) ((NDEF_FILE_LEN >> 8) & 0xFF);
         ccFile[12] = (byte) (NDEF_FILE_LEN & 0xFF);
 
-        // Allocate the NDEF file and the key read buffer as persistent arrays.
-        // keyBuf is 64 bytes — the Shareable impl writes X||Y into the APDU
-        // buffer (a JCRE global entry-point array) and we copy it out into
-        // keyBuf here. See NdefApplet.initializeFromSibling.
+        // Persistent NDEF file — baked once at first-select.
         ndefFile = new byte[NDEF_FILE_LEN];
-        keyBuf = new byte[(short) 64];
     }
 
     /**
      * One-shot lazy initialisation: reach into the sibling ToolRentalApplet
-     * via the Shareable interface, pull its public key, and bake the NDEF
-     * URI record into this.ndefFile. Called from the first SELECT — by then
-     * the card has been reset once since install, and both packages are
-     * fully linked.
+     * via the Shareable interface, ask it for its 32-byte cardKeyHash, and
+     * bake the NDEF records. Called from the first SELECT — by then the
+     * card has been reset once since install, and both packages are fully
+     * linked.
      */
     private void initializeFromSibling() {
         AID toolRentalAid = JCSystem.lookupAID(TOOL_RENTAL_AID, (short) 0,
@@ -214,21 +232,16 @@ public class NdefApplet extends Applet {
         if (sharable == null) {
             ISOException.throwIt(ISO7816.SW_CONDITIONS_NOT_SATISFIED);
         }
-        // Have the sibling drop the 64 raw key bytes into the APDU buffer.
-        // We must fetch the APDU buffer reference in OUR context and hand
-        // it over as a parameter — APDU.getCurrentAPDUBuffer() throws
-        // SecurityException from the server's context (it's not the
-        // currently-selected applet during the cross-context call).
-        //
-        // The APDU buffer is a JCRE global array, so passing it as a
-        // Shareable method argument bypasses the firewall (which would
-        // otherwise reject any caller-owned byte[] parameter).
-        //
-        // Copy immediately out into keyBuf — the JCRE does not preserve
-        // the APDU buffer across dispatches.
+        // Have the sibling drop the 32-byte sha256(x || y) card identifier
+        // into the APDU buffer at offset 0. We must fetch the APDU buffer
+        // reference in OUR context and hand it over as a parameter —
+        // APDU.getCurrentAPDUBuffer() throws SecurityException from the
+        // server's context (it's not the currently-selected applet during
+        // the cross-context call). The APDU buffer is a JCRE global array,
+        // so passing it as a Shareable method argument bypasses the
+        // firewall that would otherwise reject a caller-owned byte[].
         byte[] apduBuf = APDU.getCurrentAPDUBuffer();
-        sharable.writePublicKey(apduBuf, (short) 0);
-        Util.arrayCopyNonAtomic(apduBuf, (short) 0, keyBuf, (short) 0, (short) 64);
+        sharable.writeCardKeyHash(apduBuf, (short) 0);
 
         // Construct the NDEF file: NLEN prefix + three records
         // (custom URI, https URI, Text).
@@ -244,7 +257,7 @@ public class NdefApplet extends Applet {
         Util.arrayCopyNonAtomic(CUSTOM_URI_PREFIX, (short) 0,
                                 ndefFile, off, CUSTOM_URI_PREFIX_LEN);
         off += CUSTOM_URI_PREFIX_LEN;
-        off = writeHex(keyBuf, (short) 0, (short) 64, ndefFile, off);
+        off = writeHex(apduBuf, (short) 0, HASH_LEN, ndefFile, off);
 
         // Record 2: https URI. MB=0, ME=0, SR=1, TNF=WKT → 0x11.
         ndefFile[off++] = (byte) 0x11;
@@ -254,7 +267,7 @@ public class NdefApplet extends Applet {
         Util.arrayCopyNonAtomic(HTTPS_URI_PREFIX, (short) 0,
                                 ndefFile, off, HTTPS_URI_PREFIX_LEN);
         off += HTTPS_URI_PREFIX_LEN;
-        off = writeHex(keyBuf, (short) 0, (short) 64, ndefFile, off);
+        off = writeHex(apduBuf, (short) 0, HASH_LEN, ndefFile, off);
 
         // Record 3: Text. MB=0, ME=1, SR=1, TNF=WKT → 0x51.
         ndefFile[off++] = (byte) 0x51;
@@ -293,8 +306,9 @@ public class NdefApplet extends Applet {
 
     public void process(APDU apdu) {
         if (selectingApplet()) {
-            // First-select initialisation — populate the NDEF file from the
-            // sibling applet's public key. Runs once per card lifetime.
+            // First-select initialisation — reach into the sibling applet,
+            // hash its key, and populate the NDEF file. Runs once per card
+            // lifetime.
             if (!initialized) {
                 initializeFromSibling();
             }

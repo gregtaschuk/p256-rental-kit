@@ -86,6 +86,13 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
     private ECPrivateKey  privateKey;
     private ECPublicKey   publicKey;
     private Signature     signer;
+    // Persistent 32-byte sha256(X || Y) card identifier, computed once at
+    // install time and handed out verbatim via CardKeyShareable.writeCardKeyHash.
+    // Doing the hash at install (rather than inside the cross-context Shareable
+    // call) avoids touching hardware crypto during first-select of the sibling
+    // NDEF applet — some J3R180 firmware revisions throw 6F00 from a
+    // MessageDigest.doFinal running inside a server-context Shareable invocation.
+    private byte[]        cardKeyHashStore;
 
     // ── Replay-prevention counter (persistent) ────────────────────────────────
     // Monotonic counter consumed by each SIGN call. Starts at 1 so the first
@@ -114,6 +121,19 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
 
         // ECDSA signer using SHA-256 (card hashes the input before signing)
         signer = Signature.getInstance(Signature.ALG_ECDSA_SHA_256, false);
+
+        // Compute sha256(X || Y) once, now, while we are the selected applet
+        // in our own context. Stages the 65-byte uncompressed public key into
+        // the transient scratch buffer, drops the 0x04 prefix, and hashes the
+        // 64 raw bytes into persistent cardKeyHashStore.
+        cardKeyHashStore = new byte[(short) 32];
+        short pubLen = publicKey.getW(scratch, (short) 0);
+        if (pubLen != 65 || scratch[0] != (byte) 0x04) {
+            ISOException.throwIt(ISO7816.SW_DATA_INVALID);
+        }
+        Util.arrayCopyNonAtomic(scratch, (short) 1, scratch, (short) 0, (short) 64);
+        MessageDigest sha256 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+        sha256.doFinal(scratch, (short) 0, (short) 64, cardKeyHashStore, (short) 0);
 
         nextCounter = (short) 1;
     }
@@ -324,26 +344,24 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
     // ── CardKeyShareable ──────────────────────────────────────────────────────
 
     /**
-     * Write the raw 64-byte public key (X || Y) into `globalBuf` at
-     * `offset`. Called cross-context via CardKeyShareable from NdefApplet.
+     * Write sha256(X || Y) into `globalBuf` at `offset` — the 32-byte card
+     * identifier baked into NDEF cold-tap URLs by the sibling NdefApplet.
+     * Called cross-context via CardKeyShareable.
      *
      * `globalBuf` MUST be a JCRE global array — the caller passes in the
-     * APDU buffer reference it fetched from its own context. We cannot
-     * fetch it ourselves: APDU.getCurrentAPDUBuffer() throws
-     * SecurityException from a non-selected context. We also cannot touch
-     * our own CLEAR_ON_DESELECT transient `scratch` here (same reason —
-     * we're not the selected applet during this call) or accept a
-     * caller-owned regular array (firewall rejects).
+     * APDU buffer reference it fetched from its own context. The firewall
+     * rejects caller-owned regular arrays, so this must be the APDU buffer.
      *
-     * getW writes the 65-byte 0x04-prefixed uncompressed form; we shift
-     * X||Y left by one to overwrite the leading 0x04.
+     * The hash itself was computed once at install time and lives in the
+     * persistent `cardKeyHashStore` field. This method is a straight
+     * byte-copy, deliberately doing zero hardware-crypto work during the
+     * cross-context call — a previous implementation that called
+     * publicKey.getW() + MessageDigest.doFinal() here threw 6F00 on some
+     * J3R180 firmware revisions when hit during first-select of NdefApplet.
      */
-    public void writePublicKey(byte[] globalBuf, short offset) {
-        short pubLen = publicKey.getW(globalBuf, offset);
-        if (pubLen != 65 || globalBuf[offset] != (byte) 0x04) {
-            ISOException.throwIt(ISO7816.SW_DATA_INVALID);
-        }
-        Util.arrayCopyNonAtomic(globalBuf, (short)(offset + 1), globalBuf, offset, (short) 64);
+    public void writeCardKeyHash(byte[] globalBuf, short offset) {
+        Util.arrayCopyNonAtomic(cardKeyHashStore, (short) 0,
+                                globalBuf, offset, (short) 32);
     }
 
     /**
