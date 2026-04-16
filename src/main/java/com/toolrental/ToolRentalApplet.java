@@ -14,12 +14,19 @@ import javacardx.crypto.Cipher;
  *   INS 0x02  SIGN            — Accepts a 32-byte hash that must commit to the
  *                               card's next counter value. Atomically increments
  *                               the persistent counter and returns
- *                               r[32] || s[32] || counter[8] (74 bytes), where
+ *                               r[32] || s[32] || counter[8] (72 bytes), where
  *                               `counter` is the value just consumed.
+ *                               P1/P2 control rentalIdStore:
+ *                                 P1=0x01 → compute sha256(cardKeyHash || counter)
+ *                                           and overwrite rentalIdStore (StartRental).
+ *                                 P2=0x01 → clear rentalIdStore after signing (EndRental).
+ *                                 P1=0x00, P2=0x00 → don't touch rentalIdStore (default).
  *   INS 0x03  GET_COUNTER     — Returns the next counter value the card would
  *                               produce on the next SIGN call, as 8 bytes
  *                               big-endian. Used by the host to pre-compute the
  *                               hash before tapping.
+ *   INS 0x04  GET_RENTAL_ID   — Returns the 32-byte rentalIdStore. All zeros
+ *                               means no active rental.
  *
  * The private key is generated on-card and never exported. The card's P-256
  * public key coordinates (X, Y) are registered on-chain in ToolNFT.sol.
@@ -44,6 +51,7 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
     private static final byte INS_GET_PUBLIC_KEY = (byte) 0x01;
     private static final byte INS_SIGN           = (byte) 0x02;
     private static final byte INS_GET_COUNTER    = (byte) 0x03;
+    private static final byte INS_GET_RENTAL_ID  = (byte) 0x04;
 
     // ── P-256 (secp256r1) curve parameters ──────────────────────────────��────
     private static final byte[] P256_P = {
@@ -93,6 +101,10 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
     // NDEF applet — some J3R180 firmware revisions throw 6F00 from a
     // MessageDigest.doFinal running inside a server-context Shareable invocation.
     private byte[]        cardKeyHashStore;
+    // Persistent 32-byte rental ID derived as sha256(cardKeyHashStore || counter)
+    // when SIGN is called with P1=0x01 (StartRental). Cleared when SIGN is
+    // called with P2=0x01 (EndRental). All zeros means no active rental.
+    private byte[]        rentalIdStore;
 
     // ── Replay-prevention counter (persistent) ────────────────────────────────
     // Monotonic counter consumed by each SIGN call. Starts at 1 so the first
@@ -134,6 +146,8 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
         Util.arrayCopyNonAtomic(scratch, (short) 1, scratch, (short) 0, (short) 64);
         MessageDigest sha256 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
         sha256.doFinal(scratch, (short) 0, (short) 64, cardKeyHashStore, (short) 0);
+
+        rentalIdStore = new byte[(short) 32]; // all zeros = no active rental
 
         nextCounter = (short) 1;
     }
@@ -181,6 +195,9 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
             case INS_GET_COUNTER:
                 handleGetCounter(apdu);
                 break;
+            case INS_GET_RENTAL_ID:
+                handleGetRentalId(apdu);
+                break;
             default:
                 ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
         }
@@ -211,6 +228,20 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
     }
 
     /**
+     * INS 0x04 GET_RENTAL_ID
+     *
+     * Command:  CLA=00 INS=04 P1=00 P2=00 Le=20
+     * Response: 32 bytes — the current rentalIdStore. All zeros indicates no
+     *           active rental. Non-zero is sha256(cardKeyHash || counter) set
+     *           by a prior SIGN with P1=0x01.
+     */
+    private void handleGetRentalId(APDU apdu) {
+        apdu.setOutgoing();
+        apdu.setOutgoingLength((short) 32);
+        apdu.sendBytesLong(rentalIdStore, (short) 0, (short) 32);
+    }
+
+    /**
      * INS 0x01 GET_PUBLIC_KEY
      *
      * Command:  CLA=00 INS=01 P1=00 P2=00 Le=40
@@ -233,9 +264,17 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
     /**
      * INS 0x02 SIGN
      *
-     * Command:  CLA=00 INS=02 P1=00 P2=00 Lc=20 [32-byte hash] Le=48
+     * Command:  CLA=00 INS=02 P1=xx P2=xx Lc=20 [32-byte hash] Le=48
      * Response: 72 bytes — r[32] || s[32] || counter[8] (counter big-endian,
      *           upper 6 bytes zero).
+     *
+     * P1/P2 control rentalIdStore:
+     *   P1=0x01 → after signing, compute sha256(cardKeyHashStore || counter)
+     *             and overwrite rentalIdStore. Used by StartRental so the card
+     *             remembers which rental it's participating in.
+     *   P2=0x01 → after signing, clear rentalIdStore to all zeros. Used by
+     *             EndRental to reset for the next rental cycle.
+     *   P1=0x00, P2=0x00 → don't touch rentalIdStore (default, backward-compatible).
      *
      * The 32-byte hash is an EIP-712 digest that MUST commit to the counter
      * value the card will consume on this call — the host gets that value
@@ -254,6 +293,8 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
      */
     private void handleSign(APDU apdu) {
         byte[] buf = apdu.getBuffer();
+        byte p1 = buf[ISO7816.OFFSET_P1];
+        byte p2 = buf[ISO7816.OFFSET_P2];
         short dataLen = apdu.setIncomingAndReceive();
 
         if (dataLen != 32) {
@@ -291,6 +332,19 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
         Util.arrayFillNonAtomic(scratch, (short) 64, (short) 6, (byte) 0);
         scratch[70] = (byte) ((consumed >> 8) & 0xFF);
         scratch[71] = (byte) (consumed & 0xFF);
+
+        // ── P1/P2: rentalIdStore management ──────────────────────────────
+        if (p1 == (byte) 0x01) {
+            // StartRental: compute rentalId = sha256(cardKeyHashStore || counter)
+            // and overwrite rentalIdStore. The 8-byte counter is already in
+            // scratch[64..71] from the append above.
+            MessageDigest md = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+            md.update(cardKeyHashStore, (short) 0, (short) 32);
+            md.doFinal(scratch, (short) 64, (short) 8, rentalIdStore, (short) 0);
+        } else if (p2 == (byte) 0x01) {
+            // EndRental: clear rentalIdStore
+            Util.arrayFillNonAtomic(rentalIdStore, (short) 0, (short) 32, (byte) 0);
+        }
 
         apdu.setOutgoing();
         apdu.setOutgoingLength((short) 72);
