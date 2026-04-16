@@ -25,7 +25,7 @@ import { NFC } from "nfc-pcsc";
 import { Command } from "commander";
 import { ethers } from "ethers";
 import { p256 } from "@noble/curves/p256";
-import { readCardPublicKey, signHash, readRentalId } from "./card";
+import { readCardPublicKey, readCardCounter, signHash, readRentalId } from "./card";
 import { parseResponse } from "./apdu";
 
 // Minimal ABI for ToolNFT (only the functions used by the provisioner)
@@ -50,6 +50,46 @@ program
       const { x, y } = await readCardPublicKey(reader);
       console.log("\nPublic key X:", x);
       console.log("Public key Y:", y);
+    });
+  });
+
+// ── inspect command ──────────────────────────────────────────────────────────
+
+program
+  .command("inspect")
+  .description("Read all card state in a single session (key, counter, rental ID, NDEF)")
+  .action(async () => {
+    await withReader(async (reader) => {
+      // 1. Public key
+      const { x, y } = await readCardPublicKey(reader);
+      const cardKeyHash = ethers.sha256(ethers.concat([x, y])).slice(2);
+
+      console.log("Public key X:", x);
+      console.log("Public key Y:", y);
+      console.log("Card key hash: 0x" + cardKeyHash);
+
+      // 2. Counter
+      try {
+        const counter = await readCardCounter(reader);
+        const used = counter > 1n ? Number(counter) - 1 : 0;
+        console.log(`Counter: ${counter} (${used} signature${used === 1 ? "" : "s"} issued)`);
+      } catch {
+        console.log("Counter: (unsupported)");
+      }
+
+      // 3. Rental ID
+      try {
+        const rentalId = await readRentalId(reader);
+        const isZero = rentalId === "0x" + "00".repeat(32);
+        console.log(`Rental ID: ${isZero ? "(none — card is idle)" : rentalId}`);
+      } catch {
+        console.log("Rental ID: (unsupported)");
+      }
+
+      // 4. NDEF URIs (derived from key hash — matches what the NDEF applet emits)
+      console.log("NDEF URIs:");
+      console.log(`  toolrental://card/${cardKeyHash}`);
+      console.log(`  https://pyrite.rocks/tools/${cardKeyHash}`);
     });
   });
 
@@ -298,7 +338,8 @@ program
                 `body read returned ${bodyBytes.length} bytes (expected ${nlen})`,
               );
             }
-            // Parse the single short URI record from the body.
+            // Parse the first short URI record from the body. Record 1 is
+            // the https URL (abbreviation 0x04 = "https://").
             const rec = bodyBytes.subarray(0, nlen);
             if (rec.length < 5) {
               throw new Error(`record too short: ${rec.length} bytes`);
@@ -316,16 +357,18 @@ program
               throw new Error("record is not an NFC Well-Known URI ('U') record");
             }
             const abbrev = rec[4];
-            if (abbrev !== 0x00) {
-              throw new Error(`unexpected URI abbreviation byte 0x${abbrev.toString(16)} (want 0x00)`);
+            if (abbrev !== 0x04) {
+              throw new Error(`unexpected URI abbreviation byte 0x${abbrev.toString(16)} (want 0x04 = "https://")`);
             }
             const uriEnd = 5 + (payloadLen - 1);
             if (uriEnd > rec.length) {
               throw new Error(`URI length (${payloadLen - 1}) exceeds record body`);
             }
-            const uri = rec.subarray(5, uriEnd).toString("ascii");
+            // Abbreviation 0x04 means the payload omits "https://" — prepend it.
+            const uriSuffix = rec.subarray(5, uriEnd).toString("ascii");
+            const uri = `https://${uriSuffix}`;
             const cardKeyHash = ethers.sha256(ethers.concat([key1.x, key1.y]));
-            const expectedUri = `toolrental://card/${cardKeyHash.slice(2)}`;
+            const expectedUri = `https://pyrite.rocks/tools/${cardKeyHash.slice(2)}`;
             const match = uri === expectedUri;
             record(match, "NDEF URI record encodes the card's public key",
               match ? undefined :

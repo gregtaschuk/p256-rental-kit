@@ -350,7 +350,24 @@ install_applet() {
         warn "Tool Rental applet(s) already installed on this card:"
         [[ $have_core -eq 1 ]] && warn "  - core package (A00000061700)"
         [[ $have_ndef -eq 1 ]] && warn "  - NDEF package (D2760000850100)"
-        warn ""
+        echo ""
+
+        # Read the card's current state so the operator knows what they're
+        # about to destroy. This calls the provisioner's `inspect` command
+        # which reads the key, counter, and rental ID in a single NFC session.
+        if [[ $have_core -eq 1 ]]; then
+            info "Reading current card state..."
+            echo ""
+            if [[ -d "$SCRIPT_DIR/node_modules" ]]; then
+                (cd "$SCRIPT_DIR" && npx ts-node src/index.ts inspect 2>&1) \
+                    | sed 's/^/    /' || true
+            else
+                warn "Provisioner deps not installed — skipping card state read."
+                warn "Run: cd $SCRIPT_DIR && npm install"
+            fi
+            echo ""
+        fi
+
         warn "Re-burning will destroy the on-card P-256 key pair."
         warn "Any ToolNFT on-chain registration tied to it will need re-binding."
         echo ""
