@@ -10,6 +10,7 @@ export const CLA = 0x00;
 export const INS_GET_PUBLIC_KEY = 0x01;
 export const INS_SIGN = 0x02;
 export const INS_GET_COUNTER = 0x03;
+export const INS_GET_RENTAL_ID = 0x04;
 
 /**
  * Build SELECT APDU to activate the applet.
@@ -35,11 +36,15 @@ export function buildGetPublicKeyApdu(): Buffer {
  * Build SIGN APDU.
  * @param hash32 32-byte hash to sign. Must commit to the card's next counter
  *               value (read via GET_COUNTER earlier in the same session).
+ * @param options.p1 P1 byte: 0x01 = compute & store rentalId (StartRental).
+ * @param options.p2 P2 byte: 0x01 = clear rentalIdStore (EndRental).
  * Response: 72 bytes — r[32] || s[32] || counter[8] (counter big-endian).
  */
-export function buildSignApdu(hash32: Buffer): Buffer {
+export function buildSignApdu(hash32: Buffer, options?: { p1?: number; p2?: number }): Buffer {
   if (hash32.length !== 32) throw new Error("Hash must be 32 bytes");
-  return Buffer.from([CLA, INS_SIGN, 0x00, 0x00, 0x20, ...hash32, 0x48]);
+  const p1 = options?.p1 ?? 0x00;
+  const p2 = options?.p2 ?? 0x00;
+  return Buffer.from([CLA, INS_SIGN, p1, p2, 0x20, ...hash32, 0x48]);
 }
 
 /**
@@ -48,6 +53,14 @@ export function buildSignApdu(hash32: Buffer): Buffer {
  */
 export function buildGetCounterApdu(): Buffer {
   return Buffer.from([CLA, INS_GET_COUNTER, 0x00, 0x00, 0x08]);
+}
+
+/**
+ * Build GET_RENTAL_ID APDU.
+ * Response: 32 bytes — current rentalIdStore. All zeros = no active rental.
+ */
+export function buildGetRentalIdApdu(): Buffer {
+  return Buffer.from([CLA, INS_GET_RENTAL_ID, 0x00, 0x00, 0x20]);
 }
 
 /**

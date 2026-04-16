@@ -25,7 +25,7 @@ import { NFC } from "nfc-pcsc";
 import { Command } from "commander";
 import { ethers } from "ethers";
 import { p256 } from "@noble/curves/p256";
-import { readCardPublicKey, signHash } from "./card";
+import { readCardPublicKey, signHash, readRentalId } from "./card";
 import { parseResponse } from "./apdu";
 
 // Minimal ABI for ToolNFT (only the functions used by the provisioner)
@@ -349,6 +349,17 @@ program
         console.log(`Public key Y: ${key1.y}`);
         const hashHex = ethers.sha256(ethers.concat([key1.x, key1.y])).slice(2);
         console.log(`Card key hash: 0x${hashHex}`);
+
+        // Read rentalIdStore
+        let rentalId: string | null = null;
+        try {
+          rentalId = await readRentalId(reader);
+          const isZero = rentalId === "0x" + "00".repeat(32);
+          console.log(`Rental ID: ${isZero ? "(none)" : rentalId}`);
+        } catch {
+          console.log(`Rental ID: (unsupported — old applet?)`);
+        }
+
         console.log(`\nNDEF URLs stored on card:`);
         console.log(`  toolrental://card/${hashHex}`);
         console.log(`  https://pyrite.rocks/tools/${hashHex}`);

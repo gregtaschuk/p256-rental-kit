@@ -7,6 +7,7 @@ import {
   buildGetPublicKeyApdu,
   buildSignApdu,
   buildGetCounterApdu,
+  buildGetRentalIdApdu,
   parseResponse,
 } from "./apdu";
 
@@ -72,12 +73,13 @@ export async function readCardCounter(reader: CardReader): Promise<bigint> {
 export async function signHash(
   reader: CardReader,
   hash32: Buffer,
+  options?: { p1?: number; p2?: number },
 ): Promise<{ r: string; s: string; counter: bigint }> {
   await selectApplet(reader);
 
   if (hash32.length !== 32) throw new Error("hash32 must be exactly 32 bytes");
 
-  const apdu = buildSignApdu(hash32);
+  const apdu = buildSignApdu(hash32, options);
   const response = await reader.transmit(apdu, 76); // 72 bytes + 2 SW
   const sigBytes = parseResponse(response);
 
@@ -90,5 +92,20 @@ export async function signHash(
     s: "0x" + sigBytes.subarray(32, 64).toString("hex"),
     counter: BigInt("0x" + sigBytes.subarray(64, 72).toString("hex")),
   };
+}
+
+/**
+ * Read the card's current rentalIdStore.
+ * Returns 0x-prefixed 32-byte hex. All zeros means no active rental.
+ */
+export async function readRentalId(reader: CardReader): Promise<string> {
+  await selectApplet(reader);
+  const apdu = buildGetRentalIdApdu();
+  const response = await reader.transmit(apdu, 36); // 32 bytes + 2 SW
+  const bytes = parseResponse(response);
+  if (bytes.length !== 32) {
+    throw new Error(`Unexpected rentalId length: ${bytes.length}`);
+  }
+  return "0x" + bytes.toString("hex");
 }
 
