@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * High-level card operations using the ACR122U via nfc-pcsc.
  */

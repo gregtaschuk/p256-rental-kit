@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #!/usr/bin/env ts-node
 /**
  * Tool Rental Card Provisioner CLI

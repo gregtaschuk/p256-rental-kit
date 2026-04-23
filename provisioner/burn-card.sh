@@ -42,7 +42,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JAVACARD_DIR="$(cd "$SCRIPT_DIR/../javacard" && pwd)"
-REAL_CARD_CACHE="$SCRIPT_DIR/../contracts/scripts/.real-card.json"
+# Optional: point a consumer project at a cache file to auto-record the burned
+# card's P-256 (x, y) public key after a successful burn. Unset by default —
+# the write step silently skips. Downstream projects (e.g. tool-rental's
+# dev-setup) set this to their bind-cache path so the most recently burned
+# card is the one their local chain seeds against.
+REAL_CARD_CACHE="${BIND_CARD_CACHE_PATH:-}"
 
 GP_VERSION="25.10.20"
 GP_DOWNLOAD_URL="https://github.com/martinpaljak/GlobalPlatformPro/releases/download/v${GP_VERSION}/gp.jar"
@@ -458,13 +463,16 @@ Try re-burning, or run ./test-card.sh directly for more detail."
     fi
 }
 
-# ── Step 7b: Cache key for the dev seed ───────────────────────────────────────
+# ── Step 7b: Cache key for a downstream consumer ──────────────────────────────
 #
-# dev-setup.ts reads contracts/scripts/.real-card.json and binds the first
-# seeded tool (Pressure Washer) to that card's P-256 key. By writing it here
-# automatically, the most recently burned card is always the one the local
-# Anvil chain seeds against — no manual bind-real-card.sh step needed.
+# Gated on BIND_CARD_CACHE_PATH (exported in env). When set, after a successful
+# burn this writes {x, y} JSON to that path so a downstream project can bind
+# its seeded / test state to the burned card's P-256 key. When unset, the
+# step is a silent no-op — burn-card.sh works fine as a standalone tool.
 cache_real_card() {
+    if [[ -z "$REAL_CARD_CACHE" ]]; then
+        return 0
+    fi
     if [[ "$DRY_RUN" -eq 1 ]]; then
         echo -e "${YELLOW}[DRY-RUN]${NC} would cache card key to $REAL_CARD_CACHE"
         return 0
@@ -474,18 +482,18 @@ cache_real_card() {
         return 0
     fi
 
-    info "Caching card key for dev seed..."
+    info "Caching card key to $REAL_CARD_CACHE (BIND_CARD_CACHE_PATH)..."
     local output
     if ! output="$(cd "$SCRIPT_DIR" && npx ts-node src/index.ts read-key 2>&1)"; then
         echo "$output" >&2
-        warn "read-key failed after a successful burn — dev seed cache NOT updated."
+        warn "read-key failed after a successful burn — cache NOT updated."
         return 0
     fi
     local x y
     x="$(echo "$output" | awk '/Public key X:/ {print $NF}')"
     y="$(echo "$output" | awk '/Public key Y:/ {print $NF}')"
     if [[ -z "$x" || -z "$y" ]]; then
-        warn "Could not parse X/Y from read-key output — dev seed cache NOT updated."
+        warn "Could not parse X/Y from read-key output — cache NOT updated."
         return 0
     fi
     mkdir -p "$(dirname "$REAL_CARD_CACHE")"
@@ -496,7 +504,6 @@ cache_real_card() {
 }
 EOF
     success "Cached card key to $REAL_CARD_CACHE"
-    success "Next ./dev-start.sh --reset will bind the first seeded tool to this card."
 }
 
 # ── Step 7c: Optional card lock ───────────────────────────────────────────────

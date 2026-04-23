@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 package com.toolrental;
 
 import javacard.framework.*;

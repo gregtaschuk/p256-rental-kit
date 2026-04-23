@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * APDU command builders for the ToolRental JavaCard applet.
  *

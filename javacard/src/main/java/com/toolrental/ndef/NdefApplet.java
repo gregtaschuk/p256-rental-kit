@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 package com.toolrental.ndef;
 
 import com.toolrental.CardKeyShareable;

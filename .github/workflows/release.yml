@@ -1,0 +1,55 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('javacard/pom.xml') }}
+
+      - name: Cache Oracle JavaCard SDK
+        id: cache-jckit
+        uses: actions/cache@v4
+        with:
+          path: ~/oracle_javacard_sdks
+          key: oracle-javacard-sdks-v1
+
+      - name: Clone Oracle JavaCard SDK mirror
+        if: steps.cache-jckit.outputs.cache-hit != 'true'
+        run: git clone --depth=1 https://github.com/martinpaljak/oracle_javacard_sdks.git ~/oracle_javacard_sdks
+
+      - name: Build CAPs
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_11_X64 }}
+          JAVACARD_SDK: ${{ github.workspace }}/../oracle_javacard_sdks/jc305u4_kit
+        run: |
+          cd javacard
+          JAVACARD_SDK="$HOME/oracle_javacard_sdks/jc305u4_kit" ./build.sh
+
+      - name: Upload CAPs to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            javacard/target/tool-rental-applet-1.0.0.cap
+            javacard/target/tool-rental-ndef-1.0.0.cap
+          generate_release_notes: true
