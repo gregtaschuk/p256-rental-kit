@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.toolrental</groupId>
+    <artifactId>tool-rental-applet</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>Tool Rental JavaCard Applet</name>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <javacard.version>3.0.5</javacard.version>
+    </properties>
+
+    <repositories>
+        <repository>
+            <id>javacard-pro</id>
+            <url>https://mvn.javacard.pro/maven/</url>
+        </repository>
+    </repositories>
+
+    <pluginRepositories>
+        <pluginRepository>
+            <id>javacard-pro</id>
+            <url>https://mvn.javacard.pro/maven/</url>
+        </pluginRepository>
+    </pluginRepositories>
+
+    <!-- No Maven dependencies: ant-javacard pulls the JavaCard API from jckit internally. -->
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <executions>
+                    <!-- ant-javacard compiles the source itself against the jckit;
+                         skip Maven's compile phase to avoid classpath/version issues. -->
+                    <execution>
+                        <id>default-compile</id>
+                        <phase>none</phase>
+                    </execution>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <phase>none</phase>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>run</goal></goals>
+                        <configuration>
+                            <target>
+                                <taskdef name="javacard"
+                                         classname="pro.javacard.ant.JavaCard"
+                                         classpathref="maven.plugin.classpath"/>
+                                <javacard jckit="${env.JAVACARD_SDK}">
+                                    <!-- Core ToolRental applet — registered on the Oracle
+                                         private-range RID A0000006170 -->
+                                    <cap sources="src/main/java"
+                                         package="com.toolrental"
+                                         version="1.0"
+                                         aid="A0:00:00:06:17:00"
+                                         export="target/exp"
+                                         output="target/tool-rental-applet-1.0.0.cap">
+                                        <applet class="com.toolrental.ToolRentalApplet"
+                                                aid="A0:00:00:06:17:00:01"/>
+                                    </cap>
+                                    <!-- NDEF Type 4 applet — must register on the NFC Forum
+                                         RID D276000085 so Android's tag dispatch selects it.
+                                         Separate package per JavaCard rule: all applets in a
+                                         package share the same 5-byte RID. Imports the core
+                                         package (for CardKeyShareable); ant-javacard wires
+                                         the import automatically via <import exps="..."/>. -->
+                                    <cap sources="src/main/java"
+                                         package="com.toolrental.ndef"
+                                         version="1.0"
+                                         aid="D2:76:00:00:85:01:00"
+                                         output="target/tool-rental-ndef-1.0.0.cap">
+                                        <import exps="target/exp"/>
+                                        <applet class="com.toolrental.ndef.NdefApplet"
+                                                aid="D2:76:00:00:85:01:01"/>
+                                    </cap>
+                                </javacard>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.github.martinpaljak</groupId>
+                        <artifactId>ant-javacard</artifactId>
+                        <version>26.02.22</version>
+                    </dependency>
+                </dependencies>
+            </plugin>
+        </plugins>
+    </build>
+</project>
