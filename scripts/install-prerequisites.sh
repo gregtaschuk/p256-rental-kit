@@ -99,13 +99,15 @@ install_node() {
   success "node installed: $(node --version)"
 }
 
-# ── 3. Java 11 (JAVA_HOME) ────────────────────────────────────────────────────
+# ── 3. Java 11 (JAVA11_HOME only — do NOT persist JAVA_HOME globally) ────────
 #
-# ant-javacard (invoked from pom.xml) rejects JDK 17 with an explicit error.
-# We export JAVA_HOME so `mvn package` picks it up without a per-command
-# override.
+# ant-javacard (invoked from pom.xml) rejects JDK 17 with an explicit error,
+# so the JavaCard build path needs JDK 11. We persist the location as
+# `JAVA11_HOME` and let `javacard/build.sh` override `JAVA_HOME` per-run.
+# A global `JAVA_HOME=11` would clobber other tooling on the same machine —
+# notably Android Gradle Plugin, which requires JDK 17.
 configure_java() {
-  section "OpenJDK 11"
+  section "OpenJDK 11 (JAVA11_HOME)"
   local java11
   for candidate in \
       "/usr/lib/jvm/java-11-openjdk-amd64" \
@@ -114,14 +116,13 @@ configure_java() {
     [[ -x "$candidate/bin/java" ]] && { java11="$candidate"; break; }
   done
   [[ -n "${java11:-}" ]] || { error "openjdk-11-jdk not found after install. Check apt logs."; exit 1; }
-  export JAVA_HOME="$java11"
-  if ! grep -q '# JavaCard build — JDK 11' "$(shell_rc)" 2>/dev/null; then
-    append_to_rc '# JavaCard build — JDK 11' \
-"# JavaCard build — JDK 11 (ant-javacard rejects JDK 17)
-export JAVA_HOME=${java11}
-export PATH=\"\$JAVA_HOME/bin:\$PATH\""
+  export JAVA11_HOME="$java11"
+  if ! grep -q 'JAVA11_HOME' "$(shell_rc)" 2>/dev/null; then
+    append_to_rc 'JAVA11_HOME' \
+"# JDK 11 for JavaCard applet build (javacard/build.sh uses this as JAVA_HOME)
+export JAVA11_HOME=${java11}"
   fi
-  success "JAVA_HOME set to: ${java11}"
+  success "JAVA11_HOME set to: ${java11}"
 }
 
 # ── 4. Oracle JavaCard Classic SDK 3.0.5 ─────────────────────────────────────
