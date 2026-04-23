@@ -44,7 +44,13 @@ Emits three NDEF records on a passive read:
 
 ## Build
 
-Prereqs: JDK 11 (not 17), Oracle JavaCard 3.0.5 SDK, Maven.
+Prereqs: JDK 11 (not 17), Oracle JavaCard 3.0.5 SDK, Maven, pcscd (for flashing), Node.js 18+ (for the provisioner). On Ubuntu 22.04+ the included installer handles all of it:
+
+```bash
+./scripts/install-prerequisites.sh
+```
+
+Then build the applet:
 
 ```bash
 cd javacard
