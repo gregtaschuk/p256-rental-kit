@@ -36,7 +36,7 @@ section() { echo -e "\n${BOLD}━━━ $* ━━━${NC}"; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 JCOP4_SDK_INSTALL_DIR="$HOME/oracle_javacard_sdks"
-JCOP4_SDK_JAR="api_classic-3.0.5.jar"
+JCOP4_SDK_JAR="api_classic.jar"   # in lib/ of any jc305u* kit
 JCMATHLIB_JAR_PATH="$REPO_ROOT/javacard/lib/jcmathlib.jar"
 
 shell_rc() {
