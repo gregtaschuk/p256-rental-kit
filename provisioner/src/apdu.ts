@@ -2,10 +2,11 @@
 /**
  * APDU command builders for the ToolRental JavaCard applet.
  *
- * AID: A0 00 00 06 17 00 01
+ * AID: F0 79 91 A3 EA 7F 2C (proprietary ISO 7816-5 category 'F'; the old
+ * A0000006170001 is rejected by iOS CoreNFC as a "non-permissible identifier").
  */
 
-export const APPLET_AID = Buffer.from("A0000006170001", "hex");
+export const APPLET_AID = Buffer.from("F07991A3EA7F2C", "hex");
 
 export const CLA = 0x00;
 export const INS_GET_PUBLIC_KEY = 0x01;

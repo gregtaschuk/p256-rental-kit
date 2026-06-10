@@ -62,7 +62,7 @@ identifier that ties the physical object to the on-chain NFT.
 
 ## APDU reference
 
-The applet AID is `A0 00 00 06 17 00 01`.
+The applet AID is `F0 79 91 A3 EA 7F 2C` (proprietary ISO 7816-5 category 'F'; replaced `A0 00 00 06 17 00 01`, which iOS CoreNFC rejects as non-permissible).
 
 | INS | Command | Input | Output |
 |---|---|---|---|
@@ -149,7 +149,7 @@ java -jar gp.jar --install ../javacard/target/tool-rental-applet-1.0.0.cap
 
 # Confirm installation
 java -jar gp.jar --list
-# Should show AID A0000006170001 in the applet list
+# Should show AID F07991A3EA7F2C in the applet list
 ```
 
 If your cards have non-default GlobalPlatform keys, pass them with `--key` or `--enc`,

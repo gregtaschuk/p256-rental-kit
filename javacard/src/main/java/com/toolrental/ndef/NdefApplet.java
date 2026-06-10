@@ -74,9 +74,13 @@ public class NdefApplet extends Applet {
 
     // ── Constants ─────────────────────────────────────────────────────────────
 
-    /** Sibling applet AID. Must match javacard/pom.xml for ToolRentalApplet. */
+    /** Sibling applet AID. Must match javacard/pom.xml for ToolRentalApplet
+     *  (proprietary cat-'F' F07991A3EA7F2C; the old A0000006170001 was rejected
+     *  by iOS CoreNFC as non-permissible). lookupAID() below resolves the core
+     *  applet by this exact AID to read the card key over the Shareable
+     *  interface, so it MUST equal the core applet's installed instance AID. */
     private static final byte[] TOOL_RENTAL_AID = {
-        (byte)0xA0, (byte)0x00, (byte)0x00, (byte)0x06, (byte)0x17, (byte)0x00, (byte)0x01
+        (byte)0xF0, (byte)0x79, (byte)0x91, (byte)0xA3, (byte)0xEA, (byte)0x7F, (byte)0x2C
     };
 
     // ISO 7816 instruction bytes we handle

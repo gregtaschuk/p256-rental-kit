@@ -65,16 +65,19 @@
                                          classname="pro.javacard.ant.JavaCard"
                                          classpathref="maven.plugin.classpath"/>
                                 <javacard jckit="${env.JAVACARD_SDK}">
-                                    <!-- Core ToolRental applet — registered on the Oracle
-                                         private-range RID A0000006170 -->
+                                    <!-- Core ToolRental applet — proprietary ISO/IEC 7816-5
+                                         category-'F' AID (F07991A3EA7F + ...2C). The old
+                                         A0000006170001 was an unregistered category-'A' AID
+                                         that iOS CoreNFC rejects as "non-permissible", breaking
+                                         all iOS taps. F-range is unreserved, no registration. -->
                                     <cap sources="src/main/java"
                                          package="com.toolrental"
                                          version="1.0"
-                                         aid="A0:00:00:06:17:00"
+                                         aid="F0:79:91:A3:EA:7F"
                                          export="target/exp"
                                          output="target/tool-rental-applet-1.0.0.cap">
                                         <applet class="com.toolrental.ToolRentalApplet"
-                                                aid="A0:00:00:06:17:00:01"/>
+                                                aid="F0:79:91:A3:EA:7F:2C"/>
                                     </cap>
                                     <!-- NDEF Type 4 applet — must register on the NFC Forum
                                          RID D276000085 so Android's tag dispatch selects it.

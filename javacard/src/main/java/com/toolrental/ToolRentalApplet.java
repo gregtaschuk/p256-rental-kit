@@ -35,7 +35,12 @@ import javacardx.crypto.Cipher;
  * P-256 (secp256r1 / NIST P-256) is a named curve natively supported by the
  * J3R180 hardware crypto accelerator, so no external library is required.
  *
- * AID: A0 00 00 06 17 00 01 (7 bytes, registered private range)
+ * AID: F0 79 91 A3 EA 7F 2C (7 bytes, proprietary ISO 7816-5 category 'F').
+ * The applet registers under the instance AID supplied at install time
+ * (register(bArray,...) below), so the card's AID is whatever gp.jar installs —
+ * keep the pom.xml applet aid and provisioner/burn-card.sh in sync. The old
+ * A0000006170001 (category 'A', unregistered) is rejected by iOS CoreNFC as a
+ * "non-permissible identifier" and broke all iOS NFC taps.
  *
  * P-256 curve parameters:
  *   p  = FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF

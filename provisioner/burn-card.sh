@@ -54,7 +54,11 @@ GP_DOWNLOAD_URL="https://github.com/martinpaljak/GlobalPlatformPro/releases/down
 GP_JAR_DEFAULT="$SCRIPT_DIR/gp.jar"
 CAP_DEFAULT="$JAVACARD_DIR/target/tool-rental-applet-1.0.0.cap"
 NDEF_CAP_DEFAULT="$JAVACARD_DIR/target/tool-rental-ndef-1.0.0.cap"
-APPLET_AID="A0000006170001"
+# Proprietary ISO 7816-5 category-'F' AID (was A0000006170001, which iOS CoreNFC
+# rejects as "non-permissible"). Used to verify the installed instance AID after
+# --install. If you flash a PREBUILT (old-AID) CAP instead of rebuilding, force
+# this instance AID with: gp.jar --install <cap> --create F07991A3EA7F2C
+APPLET_AID="F07991A3EA7F2C"
 NDEF_AID="D2760000850101"
 
 RED='\033[0;31m'

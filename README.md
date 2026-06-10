@@ -6,7 +6,7 @@ Hardware-bound P-256 identity for Ethereum. A JavaCard applet that signs challen
 
 ```
 javacard/     JavaCard applet (Maven + ant-javacard, JDK 11, Oracle JC 3.0.5 SDK)
-              - ToolRentalApplet : core signer at AID A0000006170001
+              - ToolRentalApplet : core signer at AID F07991A3EA7F2C
               - NdefApplet       : Type 4 NDEF tag at AID D2760000850101
 provisioner/  Node.js CLI (TypeScript) for ACR122U USB NFC readers
               - burn-card.sh     : flash both CAPs onto a blank card via GlobalPlatform
@@ -19,7 +19,7 @@ scripts/
 
 Two applets are installed on every card.
 
-**Core signer** — `AID A0000006170001`
+**Core signer** — `AID F07991A3EA7F2C`
 
 | INS | Command | Input | P1/P2 | Output |
 |------|---------|-------|-------|--------|
@@ -40,7 +40,7 @@ Emits three NDEF records on a passive read:
 
 `<cardKeyHash>` is `sha256(X ‖ Y)` computed on the applet at install time and cached.
 
-> AID `A0000006170001` is in the unregistered range and should be swapped for a registered RID before mainnet production. `D2760000850101` is the standard NDEF Type 4 AID and is globally reserved.
+> AID `F07991A3EA7F2C` is a proprietary ISO/IEC 7816-5 category-'F' AID (unreserved, no registration required). It replaced `A0000006170001`, an unregistered category-'A' AID that iOS CoreNFC rejects as a "non-permissible identifier" — CoreNFC connects the tag then refuses the ISO-7816 channel with `NFCError Code=2`, breaking every iOS tap (Android never validates AIDs, so it was unaffected). A registered RID (category 'A'/'D', ~$3k via ISO/IEC 7816-5) is only needed for an open ecosystem/interop, not a closed fleet. `D2760000850101` is the standard NDEF Type 4 AID and is globally reserved.
 
 ## Build
 
@@ -130,7 +130,7 @@ If `BIND_CARD_CACHE_PATH` is unset, both scripts work as standalone tools — no
 Downstream consumers typically duplicate the AIDs and INS codes rather than importing this repo as a package. The values are stable:
 
 ```
-APPLET_AID     = 0xA0, 0x00, 0x00, 0x06, 0x17, 0x00, 0x01   // core signer
+APPLET_AID     = 0xF0, 0x79, 0x91, 0xA3, 0xEA, 0x7F, 0x2C   // core signer
 NDEF_AID       = 0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01   // NDEF Type 4
 INS_GET_PUBKEY = 0x01
 INS_SIGN       = 0x02

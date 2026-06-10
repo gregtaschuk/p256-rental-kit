@@ -153,15 +153,15 @@ program
     try {
       await withReader(async (reader) => {
         // ── 1. Applet selectable + key readable ─────────────────────────────
-        // readCardPublicKey() internally SELECTs the applet (AID A0000006170001)
+        // readCardPublicKey() internally SELECTs the applet (AID F07991A3EA7F2C)
         // and sends GET_PUBLIC_KEY (INS 0x01). If the applet isn't installed,
         // the SELECT throws with a non-9000 SW and we capture it as a FAIL.
         let key1: { x: string; y: string };
         try {
           key1 = await readCardPublicKey(reader);
-          record(true, "Applet selected (AID A0000006170001)");
+          record(true, "Applet selected (AID F07991A3EA7F2C)");
         } catch (err: any) {
-          record(false, "Applet selected (AID A0000006170001)", err.message);
+          record(false, "Applet selected (AID F07991A3EA7F2C)", err.message);
           throw err;
         }
 
