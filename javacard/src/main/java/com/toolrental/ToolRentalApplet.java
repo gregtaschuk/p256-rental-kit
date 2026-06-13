@@ -20,6 +20,9 @@ import javacardx.crypto.Cipher;
  *                               P1/P2 control rentalIdStore:
  *                                 P1=0x01 → compute sha256(cardKeyHash || counter)
  *                                           and overwrite rentalIdStore (StartRental).
+ *                                           REFUSED with 6985 if a rentalId is already
+ *                                           stored (no silent overwrite; counter is not
+ *                                           consumed) — clear it via INS 0x05 first.
  *                                 P2=0x01 → clear rentalIdStore after signing (EndRental).
  *                                 P1=0x00, P2=0x00 → don't touch rentalIdStore (default).
  *   INS 0x03  GET_COUNTER     — Returns the next counter value the card would
@@ -28,6 +31,9 @@ import javacardx.crypto.Cipher;
  *                               hash before tapping.
  *   INS 0x04  GET_RENTAL_ID   — Returns the 32-byte rentalIdStore. All zeros
  *                               means no active rental.
+ *   INS 0x05  CLEAR_RENTAL_ID — Zeroes rentalIdStore with no signature and no
+ *                               counter use. Desync-recovery primitive (host gates
+ *                               it on an on-chain userOf == 0 check).
  *
  * The private key is generated on-card and never exported. The card's P-256
  * public key coordinates (X, Y) are registered on-chain in ToolNFT.sol.
@@ -54,10 +60,11 @@ import javacardx.crypto.Cipher;
 public class ToolRentalApplet extends Applet implements CardKeyShareable {
 
     // ── APDU instruction bytes ────────────────────────────────────────────────
-    private static final byte INS_GET_PUBLIC_KEY = (byte) 0x01;
-    private static final byte INS_SIGN           = (byte) 0x02;
-    private static final byte INS_GET_COUNTER    = (byte) 0x03;
-    private static final byte INS_GET_RENTAL_ID  = (byte) 0x04;
+    private static final byte INS_GET_PUBLIC_KEY  = (byte) 0x01;
+    private static final byte INS_SIGN            = (byte) 0x02;
+    private static final byte INS_GET_COUNTER     = (byte) 0x03;
+    private static final byte INS_GET_RENTAL_ID   = (byte) 0x04;
+    private static final byte INS_CLEAR_RENTAL_ID = (byte) 0x05;
 
     // ── P-256 (secp256r1) curve parameters ──────────────────────────────��────
     private static final byte[] P256_P = {
@@ -204,6 +211,9 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
             case INS_GET_RENTAL_ID:
                 handleGetRentalId(apdu);
                 break;
+            case INS_CLEAR_RENTAL_ID:
+                handleClearRentalId(apdu);
+                break;
             default:
                 ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
         }
@@ -245,6 +255,38 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
         apdu.setOutgoing();
         apdu.setOutgoingLength((short) 32);
         apdu.sendBytesLong(rentalIdStore, (short) 0, (short) 32);
+    }
+
+    /**
+     * INS 0x05 CLEAR_RENTAL_ID
+     *
+     * Command:  CLA=00 INS=05 P1=00 P2=00
+     * Response: none — SW 9000 only.
+     *
+     * Zeroes rentalIdStore with NO signature and NO counter consumption — the
+     * recovery primitive for a card↔chain desync where the card believes it is
+     * in a rental but the chain shows the tool idle (e.g. a StartRental whose
+     * on-chain tx never confirmed, which would otherwise leave the refuse-double-
+     * start guard wedged). The host gates this on an on-chain userOf == 0 check
+     * before calling. Old applets that predate this INS reject it with
+     * SW_INS_NOT_SUPPORTED (6D00); the host then falls back to SIGN P2=0x01.
+     */
+    private void handleClearRentalId(APDU apdu) {
+        Util.arrayFillNonAtomic(rentalIdStore, (short) 0, (short) 32, (byte) 0);
+        // No outgoing data; the JCRE sends SW 9000 on normal return.
+    }
+
+    /**
+     * True iff rentalIdStore holds a non-zero value (an active rental). Constant-
+     * time-ish OR-reduction over all 32 bytes — no early return, no secret leak
+     * (the value isn't secret, but this keeps it branch-free).
+     */
+    private boolean rentalIdIsSet() {
+        byte acc = 0;
+        for (short i = 0; i < 32; i++) {
+            acc |= rentalIdStore[i];
+        }
+        return acc != 0;
     }
 
     /**
@@ -305,6 +347,15 @@ public class ToolRentalApplet extends Applet implements CardKeyShareable {
 
         if (dataLen != 32) {
             ISOException.throwIt(ISO7816.SW_WRONG_LENGTH);
+        }
+
+        // Refuse a second StartRental while a rentalId is already stored, so the
+        // stored pointer (the offline single-tap end-rental reference) can never
+        // be silently overwritten by a start whose on-chain tx later fails. Thrown
+        // BEFORE the counter is consumed, so recovery can retry with a fresh
+        // counter after CLEAR_RENTAL_ID. Host maps 6985 → reconcile-against-userOf.
+        if (p1 == (byte) 0x01 && rentalIdIsSet()) {
+            ISOException.throwIt(ISO7816.SW_CONDITIONS_NOT_SATISFIED);
         }
 
         if (nextCounter == Short.MAX_VALUE) {
