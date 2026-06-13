@@ -13,6 +13,7 @@ export const INS_GET_PUBLIC_KEY = 0x01;
 export const INS_SIGN = 0x02;
 export const INS_GET_COUNTER = 0x03;
 export const INS_GET_RENTAL_ID = 0x04;
+export const INS_CLEAR_RENTAL_ID = 0x05;
 
 /**
  * Build SELECT APDU to activate the applet.
@@ -63,6 +64,15 @@ export function buildGetCounterApdu(): Buffer {
  */
 export function buildGetRentalIdApdu(): Buffer {
   return Buffer.from([CLA, INS_GET_RENTAL_ID, 0x00, 0x00, 0x20]);
+}
+
+/**
+ * Build CLEAR_RENTAL_ID APDU.
+ * Zeroes rentalIdStore with no signature and no counter use (desync recovery).
+ * Response: none — SW 9000 only. Old applets reject with SW=6D00.
+ */
+export function buildClearRentalIdApdu(): Buffer {
+  return Buffer.from([CLA, INS_CLEAR_RENTAL_ID, 0x00, 0x00]);
 }
 
 /**
