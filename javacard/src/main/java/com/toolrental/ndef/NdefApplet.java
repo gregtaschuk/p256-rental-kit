@@ -15,7 +15,7 @@ import javacard.framework.Util;
  * NFC Forum Type 4 Tag applet. Emits a three-record NDEF message the phone's
  * OS reader picks up on tap:
  *
- *   1. URI record: https://pyrite.rocks/tools/<hashHex>
+ *   1. URI record: https://pyrite.rent/tools/<hashHex>
  *      (stored with URI abbreviation code 0x04 = "https://" to save 8 bytes;
  *      first record so iPhone Core NFC's background reader surfaces the tag)
  *   2. URI record: toolrental://card/<hashHex>
@@ -30,7 +30,7 @@ import javacard.framework.Util;
  *
  * Android dispatch: On API 31+, the NFC dispatch system routes unverified
  * https URIs to the browser via ACTION_VIEW fallback. To prevent this,
- * pyrite.rocks hosts .well-known/assetlinks.json with the app's signing-
+ * pyrite.rent hosts .well-known/assetlinks.json with the app's signing-
  * cert SHA-256 fingerprint, and the AndroidManifest NDEF_DISCOVERED filter
  * has autoVerify="true". Android verifies the domain at install time and
  * dispatches NFC taps directly to the app.
@@ -116,7 +116,7 @@ public class NdefApplet extends Applet {
     };
 
     // Record 1 — https URI payload: 1-byte abbreviation code (0x04 = "https://")
-    // + "pyrite.rocks/tools/" + 64 hex chars.
+    // + "pyrite.rent/tools/" + 64 hex chars.
     //
     // Size constants are hard-coded integer literals on purpose: the JavaCard
     // converter rejects arraylength / iadd bytecode in the class initializer,
@@ -124,12 +124,12 @@ public class NdefApplet extends Applet {
     // short's initializer. Keep these in sync if the arrays change.
     private static final byte[] HTTPS_URI_PREFIX = {
         (byte) 0x04,                                 // URI abbreviation: "https://"
-        'p','y','r','i','t','e','.','r','o','c','k','s','/','t','o','o','l','s','/'
+        'p','y','r','i','t','e','.','r','e','n','t','/','t','o','o','l','s','/'
     };
-    private static final short HTTPS_URI_PREFIX_LEN = (short) 20;    // = HTTPS_URI_PREFIX.length
+    private static final short HTTPS_URI_PREFIX_LEN = (short) 19;    // = HTTPS_URI_PREFIX.length
     private static final short HASH_LEN              = (short) 32;   // sha256 digest size
     private static final short HASH_HEX_LEN          = (short) 64;   // 32 bytes → 64 hex
-    private static final short HTTPS_URI_PAYLOAD_LEN = (short) 84;   // 20 + 64
+    private static final short HTTPS_URI_PAYLOAD_LEN = (short) 83;   // 19 + 64
 
     // Record 2 — custom-scheme URI payload: 1-byte abbreviation code (0x00 =
     // "no prefix", full URI in body) + "toolrental://card/" + 64 hex chars.
@@ -156,7 +156,7 @@ public class NdefApplet extends Applet {
     //
     // Record 1 — URI, first record, not last:
     //   header=0x91 type_len=0x01 pay_len=HTTPS_URI_PAYLOAD_LEN type='U'
-    //   payload=[0x04 || "pyrite.rocks/tools/" || hex hash]
+    //   payload=[0x04 || "pyrite.rent/tools/" || hex hash]
     //
     // Record 2 — URI, middle record:
     //   header=0x11 type_len=0x01 pay_len=CUSTOM_URI_PAYLOAD_LEN type='U'
@@ -165,11 +165,11 @@ public class NdefApplet extends Applet {
     // Record 3 — Text, last record:
     //   header=0x51 type_len=0x01 pay_len=TEXT_PAYLOAD_LEN type='T'
     //   payload=[0x02 || 'e' 'n' || LABEL_TEXT]
-    private static final short HTTPS_URI_RECORD_LEN  = (short) 88;   // 4 + 84
+    private static final short HTTPS_URI_RECORD_LEN  = (short) 87;   // 4 + 83
     private static final short CUSTOM_URI_RECORD_LEN = (short) 87;   // 4 + 83
     private static final short TEXT_RECORD_LEN       = (short) 23;   // 4 + 19
-    private static final short NDEF_RECORD_LEN       = (short) 198;  // 88 + 87 + 23
-    private static final short NDEF_FILE_LEN         = (short) 200;  // 2 + 198
+    private static final short NDEF_RECORD_LEN       = (short) 197;  // 87 + 87 + 23
+    private static final short NDEF_FILE_LEN         = (short) 199;  // 2 + 197
 
     // ── Persistent state ──────────────────────────────────────────────────────
 
