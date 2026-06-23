@@ -90,7 +90,7 @@ program
       // 4. NDEF URIs (derived from key hash — matches what the NDEF applet emits)
       console.log("NDEF URIs:");
       console.log(`  toolrental://card/${cardKeyHash}`);
-      console.log(`  https://pyrite.rocks/tools/${cardKeyHash}`);
+      console.log(`  https://pyrite.rent/tools/${cardKeyHash}`);
     });
   });
 
@@ -369,7 +369,7 @@ program
             const uriSuffix = rec.subarray(5, uriEnd).toString("ascii");
             const uri = `https://${uriSuffix}`;
             const cardKeyHash = ethers.sha256(ethers.concat([key1.x, key1.y]));
-            const expectedUri = `https://pyrite.rocks/tools/${cardKeyHash.slice(2)}`;
+            const expectedUri = `https://pyrite.rent/tools/${cardKeyHash.slice(2)}`;
             const match = uri === expectedUri;
             record(match, "NDEF URI record encodes the card's public key",
               match ? undefined :
@@ -406,7 +406,7 @@ program
 
         console.log(`\nNDEF URLs stored on card:`);
         console.log(`  toolrental://card/${hashHex}`);
-        console.log(`  https://pyrite.rocks/tools/${hashHex}`);
+        console.log(`  https://pyrite.rent/tools/${hashHex}`);
 
         if (passed !== checks.length) {
           process.exitCode = 1;
